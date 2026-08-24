@@ -13,7 +13,7 @@ console.log(
 // ==========================================
 // VARIÁVEIS GLOBAIS (Acessíveis por outros scripts)
 // ==========================================
-window.API_URL = 'http://localhost:3000';
+window.API_URL = 'https://fichaassimilacaorpg.onrender.com';
 
 window.mostrarNotificacao = function (mensagem, tipo = 'sucesso') {
     let container = document.getElementById('toast-container');

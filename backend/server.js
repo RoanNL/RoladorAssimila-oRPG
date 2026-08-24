@@ -519,7 +519,7 @@ app.get('/usuarios/me', verificarToken, async (req, res) => {
 });
 
 // =========================================================================
-// SALVAR OU ATUALIZAR FICHA (COM PRIVACIDADE)
+// SALVAR OU ATUALIZAR FICHA (AGORA COM ACESSO VIP PARA O MESTRE)
 // =========================================================================
 app.post('/personagens', verificarToken, async (req, res) => {
     const usuarioIdSeguro = req.usuario.id;
@@ -568,10 +568,31 @@ app.post('/personagens', verificarToken, async (req, res) => {
 
     try {
         if (isUpdate) {
-            const sql = `UPDATE personagens SET nome_personagem = $1, ocupacao = $2, dados_ficha = $3, foto = $4, is_privada = $5 WHERE id = $6 AND usuario_id = $7 RETURNING id`;
-            const result = await pool.query(sql, [nome, ocupacao, fichaParaOBanco, foto, isPrivada, personagemId, usuarioIdSeguro]);
+            const authCheckSql = `
+                SELECT p.usuario_id as dono_id, c.mestre_id 
+                FROM personagens p
+                LEFT JOIN membros_campanha m ON m.personagem_id = p.id
+                LEFT JOIN campanhas c ON c.id = m.campanha_id
+                WHERE p.id = $1
+            `;
+            const authCheck = await pool.query(authCheckSql, [personagemId]);
 
-            if (result.rowCount === 0) return res.status(403).json({ erro: 'Acesso negado.' });
+            if (authCheck.rows.length === 0) {
+                return res.status(404).json({ erro: 'Personagem não encontrado.' });
+            }
+
+            // Valida se o usuário que clicou em "Salvar" é o dono OU o Mestre da mesa
+            const isDono = authCheck.rows.some(row => row.dono_id === usuarioIdSeguro);
+            const isMestre = authCheck.rows.some(row => row.mestre_id === usuarioIdSeguro);
+
+            if (!isDono && !isMestre) {
+                return res.status(403).json({ erro: 'Acesso negado. Apenas o dono ou o Mestre podem alterar esta ficha.' });
+            }
+
+            // Se passou na catraca, a query agora salva pelo ID sem exigir que seja o dono!
+            const sql = `UPDATE personagens SET nome_personagem = $1, ocupacao = $2, dados_ficha = $3, foto = $4, is_privada = $5 WHERE id = $6 RETURNING id`;
+            const result = await pool.query(sql, [nome, ocupacao, fichaParaOBanco, foto, isPrivada, personagemId]);
+
             res.json({ mensagem: 'Ficha atualizada com sucesso!', id: personagemId });
         } else {
             const sql = `INSERT INTO personagens (usuario_id, nome_personagem, ocupacao, dados_ficha, foto, is_privada) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`;
@@ -579,6 +600,7 @@ app.post('/personagens', verificarToken, async (req, res) => {
             res.json({ mensagem: 'Nova ficha salva no banco!', id: resultado.rows[0].id });
         }
     } catch (erro) {
+        console.error(erro);
         res.status(500).json({ erro: 'Erro interno do banco de dados.' });
     }
 });

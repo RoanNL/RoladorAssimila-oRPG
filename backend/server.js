@@ -71,13 +71,11 @@ const io = new Server(server, {
 });
 app.set('io', io);
 
-// Regex global para validar formato UUID
 const regexUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 io.on('connection', (socket) => {
     console.log('Um jogador conectou! ID:', socket.id);
 
-    // 🔥 NOVO: O OBS AGORA VIGIA DIRETAMENTE O PERSONAGEM, NÃO A MESA 🔥
     socket.on('entrar-obs', (personagemId) => {
         if(personagemId) {
             socket.join(personagemId.toString());
@@ -85,7 +83,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🛡️ A CATRACA VIP E O HISTÓRICO LIGADO (Pode manter o socket.on('entrar-na-campanha' intacto aqui no meio!)
     socket.on('entrar-na-campanha', async (dados) => {
         const { campanhaId, token } = dados; 
         if (!token || !campanhaId) return;
@@ -97,24 +94,22 @@ io.on('connection', (socket) => {
 
             const salaStr = campanhaId.toString(); 
 
-            // 🔥 PRIMEIRO DESCOBRE SE É O MESTRE
             const checkMestre = await pool.query('SELECT mestre_id FROM campanhas WHERE id = $1', [campanhaId]);
             const isMestre = checkMestre.rows.length > 0 && checkMestre.rows[0].mestre_id === usuarioIdSeguro;
 
             const sql = `SELECT * FROM membros_campanha WHERE campanha_id = $1 AND usuario_id = $2`;
             const resultado = await pool.query(sql, [campanhaId, usuarioIdSeguro]);
 
-            // 🔥 GARANTIA DE ENTRADA: Passa se for membro OU se for o Mestre (Blinda campanhas antigas!)
             if (resultado.rows.length > 0 || isMestre) {
                 socket.join(salaStr); 
                 console.log(`✅ Catraca VIP: Usuário ${usuarioIdSeguro} acessou a mesa ${salaStr}`);
 
-                const sqlHist = `SELECT pacote FROM historico_rolagens WHERE campanha_id = $1 ORDER BY id ASC LIMIT 50`;
+                // 🔥 CORREÇÃO DO BUG 1: Busca em ordem DECRESCENTE (DESC) para puxar os mais recentes! 🔥
+                const sqlHist = `SELECT pacote FROM historico_rolagens WHERE campanha_id = $1 ORDER BY id DESC LIMIT 50`;
                 const histResult = await pool.query(sqlHist, [campanhaId]);
                 
                 let rolagensAntigas = histResult.rows.map(row => row.pacote);
                 
-                // O FILTRO SUPREMO ATUALIZADO: Só remove a rolagem do mestre se ela NÃO for pública!
                 if (!isMestre) {
                     rolagensAntigas = rolagensAntigas.filter(r => r.isMestre !== true || r.isRolagemPublica === true);
                 }
@@ -128,7 +123,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🔥 O NOVO MOTOR DE ROLAGENS (AGORA MANDA PRO OBS MESMO FORA DA MESA!) 🔥
     socket.on('rolar-dados', async (pacoteDeDados) => {
         const { token, ...dadosDaRolagem } = pacoteDeDados;
         if (!token) return;
@@ -144,7 +138,6 @@ io.on('connection', (socket) => {
             
             let isMestre = false;
 
-            // Se o jogador estiver numa campanha, salva no histórico da mesa
             if (campanhaId) {
                 const sqlCheck = `SELECT * FROM membros_campanha WHERE campanha_id = $1 AND usuario_id = $2`;
                 const resultCheck = await pool.query(sqlCheck, [campanhaId, usuarioIdSeguro]);
@@ -162,7 +155,6 @@ io.on('connection', (socket) => {
                 }
             }
 
-            // O SEGREDO: Emite uma cópia exclusiva da rolagem APENAS para a sala particular do personagem (Onde o OBS está!)
             if (dadosDaRolagem.personagemId && !(isMestre && !dadosDaRolagem.isRolagemPublica)) {
                 socket.to(dadosDaRolagem.personagemId.toString()).emit('nova-rolagem', dadosDaRolagem);
             }
@@ -202,9 +194,6 @@ function gerarCodigoConvite() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// =========================================================================
-// ROTA DE REGISTRO 
-// =========================================================================
 app.post('/registro', async (req, res) => {
     const username = req.body.username || req.body.usuario || req.body.nome || req.body.login;
     const password = req.body.password || req.body.senha;
@@ -257,9 +246,6 @@ app.post('/registro', async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTA DE LOGIN
-// =========================================================================
 app.post('/login', async (req, res) => {
     const email = req.body.email;
     const password = req.body.password || req.body.senha;
@@ -304,9 +290,6 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTA 1: PEDIR CÓDIGO DE RECUPERAÇÃO 
-// =========================================================================
 app.post('/esqueci-senha', async (req, res) => {
     const { email } = req.body;
 
@@ -374,9 +357,6 @@ app.post('/esqueci-senha', async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTA 2: VALIDAR CÓDIGO E TROCAR A SENHA
-// =========================================================================
 app.post('/resetar-senha', async (req, res) => {
     const { email, token, novaSenha } = req.body;
 
@@ -407,16 +387,12 @@ app.post('/resetar-senha', async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTA DE LOGIN / REGISTRO COM GOOGLE
-// =========================================================================
 app.post('/auth/google', async (req, res) => {
     const { token } = req.body;
     
     if (!token) return res.status(400).json({ erro: 'Token não fornecido.' });
 
     try {
-        // Descriptografa e verifica o token junto ao Google
         const ticket = await googleClient.verifyIdToken({
             idToken: token,
             audience: process.env.GOOGLE_CLIENT_ID, 
@@ -427,14 +403,11 @@ app.post('/auth/google', async (req, res) => {
         const nome = payload.name;
         const avatar = payload.picture;
 
-        // Verifica se o usuário já existe na base
         let result = await pool.query('SELECT id, username, avatar FROM usuarios WHERE email = $1', [email]);
         let usuarioId, username;
 
         if (result.rows.length === 0) {
-            // Se não existe, REGISTRA automaticamente!
             const usernameLimpo = nome.trim();
-            // Cria uma senha aleatória que ele nunca vai usar (já que loga pelo Google)
             const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-12), 10);
             
             const insert = await pool.query(
@@ -444,15 +417,12 @@ app.post('/auth/google', async (req, res) => {
             usuarioId = insert.rows[0].id;
             username = usernameLimpo;
         } else {
-            // Se existe, faz o LOGIN
             usuarioId = result.rows[0].id;
             username = result.rows[0].username;
             
-            // Opcional: Atualizar a foto de perfil caso ele tenha mudado no Google
             await pool.query('UPDATE usuarios SET avatar = $1 WHERE id = $2 AND (avatar IS NULL OR avatar LIKE \'%googleusercontent%\')', [avatar, usuarioId]);
         }
 
-        // Gera o nosso Token JWT de sessão padrão do VTT
         const segredo = process.env.SEGREDO_JWT || 'segredo_super_secreto_rpg';
         const tokenJwt = jwt.sign({ id: usuarioId, nome: username }, segredo, { expiresIn: '7d' });
 
@@ -468,16 +438,12 @@ app.post('/auth/google', async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTA PARA ATUALIZAR E BUSCAR O AVATAR DO USUÁRIO
-// =========================================================================
 app.post('/usuarios/avatar', verificarToken, async (req, res) => {
     let foto = req.body.foto;
     const usuarioId = req.usuario.id;
 
     if (!foto) return res.status(400).json({ erro: 'Nenhuma foto enviada.' });
 
-    // Se for base64, sobe para o Supabase usando o mesmo bucket das fichas
     if (supabase && foto.startsWith('data:image')) {
         try {
             const base64Data = foto.replace(/^data:image\/\w+;base64,/, "");
@@ -518,9 +484,6 @@ app.get('/usuarios/me', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// SALVAR OU ATUALIZAR FICHA (AGORA COM ACESSO VIP PARA O MESTRE)
-// =========================================================================
 app.post('/personagens', verificarToken, async (req, res) => {
     const usuarioIdSeguro = req.usuario.id;
 
@@ -529,8 +492,6 @@ app.post('/personagens', verificarToken, async (req, res) => {
     const ocupacao = req.body.ocupacao || '';
     const dadosFicha = req.body.dadosFicha || req.body.dados_ficha || req.body.dados_personagem || {};
     let foto = req.body.foto || null;
-
-    // 🔥 RECEBE A OPÇÃO DO JOGADOR
     const isPrivada = req.body.isPrivada || false;
 
     const regexSeguro = /^[^<>{}\[\]=;]*$/;
@@ -581,7 +542,6 @@ app.post('/personagens', verificarToken, async (req, res) => {
                 return res.status(404).json({ erro: 'Personagem não encontrado.' });
             }
 
-            // Valida se o usuário que clicou em "Salvar" é o dono OU o Mestre da mesa
             const isDono = authCheck.rows.some(row => row.dono_id === usuarioIdSeguro);
             const isMestre = authCheck.rows.some(row => row.mestre_id === usuarioIdSeguro);
 
@@ -589,7 +549,6 @@ app.post('/personagens', verificarToken, async (req, res) => {
                 return res.status(403).json({ erro: 'Acesso negado. Apenas o dono ou o Mestre podem alterar esta ficha.' });
             }
 
-            // Se passou na catraca, a query agora salva pelo ID sem exigir que seja o dono!
             const sql = `UPDATE personagens SET nome_personagem = $1, ocupacao = $2, dados_ficha = $3, foto = $4, is_privada = $5 WHERE id = $6 RETURNING id`;
             const result = await pool.query(sql, [nome, ocupacao, fichaParaOBanco, foto, isPrivada, personagemId]);
 
@@ -605,9 +564,6 @@ app.post('/personagens', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// LISTAR TODAS AS FICHAS DO USUÁRIO
-// =========================================================================
 app.get('/personagens/usuario/:usuarioId', verificarToken, async (req, res) => {
     const { usuarioId } = req.params;
     const usuarioSeguroId = req.usuario.id;
@@ -625,13 +581,9 @@ app.get('/personagens/usuario/:usuarioId', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// CARREGAR UMA FICHA ESPECÍFICA 
-// =========================================================================
 app.get('/personagem/:id', verificarToken, async (req, res) => {
     const { id } = req.params;
 
-    // Escudo Anti-Batata: Verifica se a URL contém um UUID válido
     if (!regexUUID.test(id)) {
         return res.status(400).json({ erro: 'Formato de ID de personagem inválido.' });
     }
@@ -651,9 +603,6 @@ app.get('/personagem/:id', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// EXCLUIR UM PERSONAGEM 
-// =========================================================================
 app.delete('/personagens/:id', verificarToken, async (req, res) => {
     const id = req.params.id;
 
@@ -673,10 +622,6 @@ app.delete('/personagens/:id', verificarToken, async (req, res) => {
         res.status(500).json({ erro: 'Erro ao deletar ficha.' });
     }
 });
-
-// ==========================================
-// ROTAS DE CAMPANHA
-// ==========================================
 
 app.post('/campanhas', verificarToken, async (req, res) => {
     const { nome } = req.body;
@@ -699,9 +644,6 @@ app.post('/campanhas', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// SOLICITAR ENTRADA NA CAMPANHA (BATER NA PORTA)
-// =========================================================================
 app.post('/campanhas/entrar', verificarToken, async (req, res) => {
     const { codigo_convite, personagem_id } = req.body;
     const usuarioIdSeguro = req.usuario.id;
@@ -716,37 +658,28 @@ app.post('/campanhas/entrar', verificarToken, async (req, res) => {
 
         const campanhaId = resultBusca.rows[0].id;
 
-        // 1. Verifica se já é membro
         const checkMembro = await pool.query('SELECT * FROM membros_campanha WHERE campanha_id = $1 AND usuario_id = $2', [campanhaId, usuarioIdSeguro]);
         if (checkMembro.rows.length > 0) return res.status(400).json({ erro: 'Você já está nesta mesa!' });
 
-        // 2. Verifica se já tem um pedido pendente
         const checkPedido = await pool.query('SELECT * FROM pedidos_campanha WHERE campanha_id = $1 AND usuario_id = $2', [campanhaId, usuarioIdSeguro]);
         if (checkPedido.rows.length > 0) return res.status(400).json({ erro: 'Você já enviou um pedido! Aguarde o Mestre aprovar.' });
 
-        // 3. Cria o pedido na sala de espera
         await pool.query(`INSERT INTO pedidos_campanha (campanha_id, usuario_id, personagem_id) VALUES ($1, $2, $3)`, [campanhaId, usuarioIdSeguro, personagem_id]);
 
-        // 4. Avisa o Mestre em tempo real (se ele estiver na mesa)
         const io = req.app.get('io');
         if (io) io.to(campanhaId.toString()).emit('novo-pedido-entrada');
 
-        // Retorna "pendente" para o frontend saber que não é pra entrar na mesa ainda
         res.json({ pendente: true, mensagem: 'Pedido enviado! Aguarde o Mestre permitir sua entrada.' });
     } catch (erro) {
         res.status(500).json({ erro: 'Erro ao processar convite.' });
     }
 });
 
-// =========================================================================
-// ROTAS DO MESTRE: GERENCIAR PEDIDOS DE ENTRADA E TELETRANSPORTE
-// =========================================================================
 app.post('/campanhas/:id/pedidos/responder', verificarToken, async (req, res) => {
     const { pedido_id, aprovado, usuario_id, personagem_id } = req.body;
     const campanhaId = req.params.id;
 
     try {
-        // Busca as infos da campanha para mandar pro jogador conseguir "montar" a tela dele
         const campQuery = await pool.query('SELECT nome, codigo_convite FROM campanhas WHERE id = $1', [campanhaId]);
         const nomeCampanha = campQuery.rows[0]?.nome || 'Campanha';
         const codigoCampanha = campQuery.rows[0]?.codigo_convite || '---';
@@ -760,8 +693,6 @@ app.post('/campanhas/:id/pedidos/responder', verificarToken, async (req, res) =>
         const io = req.app.get('io');
         if (io) {
             io.to(campanhaId.toString()).emit('atualizar-jogadores');
-            
-            // 🔥 TELETRANSPORTE: Grito global para avisar apenas o jogador alvo que ele foi aceito!
             io.emit('pedido-respondido', { 
                 usuarioId: usuario_id, 
                 aprovado: aprovado, 
@@ -777,9 +708,6 @@ app.post('/campanhas/:id/pedidos/responder', verificarToken, async (req, res) =>
     }
 });
 
-// =========================================================================
-// ROTAS DO MESTRE: GERENCIAR PEDIDOS DE ENTRADA
-// =========================================================================
 app.get('/campanhas/:id/pedidos', verificarToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -795,29 +723,6 @@ app.get('/campanhas/:id/pedidos', verificarToken, async (req, res) => {
     }
 });
 
-app.post('/campanhas/:id/pedidos/responder', verificarToken, async (req, res) => {
-    const { pedido_id, aprovado, usuario_id, personagem_id } = req.body;
-    const campanhaId = req.params.id;
-
-    try {
-        if (aprovado) {
-            await pool.query(`INSERT INTO membros_campanha (campanha_id, usuario_id, personagem_id) VALUES ($1, $2, $3)`, [campanhaId, usuario_id, personagem_id]);
-        }
-
-        await pool.query(`DELETE FROM pedidos_campanha WHERE id = $1`, [pedido_id]);
-
-        const io = req.app.get('io');
-        if (io) io.to(campanhaId.toString()).emit('atualizar-jogadores');
-
-        res.json({ mensagem: aprovado ? 'Jogador aprovado na mesa!' : 'Jogador barrado com sucesso.' });
-    } catch (err) {
-        res.status(500).json({ erro: 'Erro ao responder pedido.' });
-    }
-});
-
-// =========================================================================
-// ROTA DO MESTRE: Expulsar Jogador
-// =========================================================================
 app.delete('/campanhas/:id/membros/:usuarioId', verificarToken, async (req, res) => {
     const campanhaId = req.params.id;
     const usuarioAlvoId = req.params.usuarioId;
@@ -839,12 +744,9 @@ app.delete('/campanhas/:id/membros/:usuarioId', verificarToken, async (req, res)
 
         await pool.query('DELETE FROM membros_campanha WHERE campanha_id = $1 AND usuario_id = $2', [campanhaId, usuarioAlvoId]);
         
-        // 🔥 A MÁGICA DA EXPULSÃO EM TEMPO REAL 🔥
         const io = req.app.get('io');
         if (io) {
-            // Emite um evento exclusivo de banimento contendo o ID do coitado
             io.to(campanhaId.toString()).emit('jogador-expulso', { usuarioId: usuarioAlvoId });
-            // Atualiza a tela de quem ficou na mesa
             io.to(campanhaId.toString()).emit('atualizar-jogadores');
         }
 
@@ -854,12 +756,8 @@ app.delete('/campanhas/:id/membros/:usuarioId', verificarToken, async (req, res)
     }
 });
 
-// =========================================================================
-// Buscar jogadores para o painel de Gerenciamento 
-// =========================================================================
 app.get('/campanhas/:id/jogadores', verificarToken, async (req, res) => {
     try {
-        // 🔥 Adicionamos o DISTINCT ON para agrupar os clones do Mestre em um só!
         const result = await pool.query(`
             SELECT DISTINCT ON (m.usuario_id) m.usuario_id, u.username, u.avatar, p.nome_personagem, c.mestre_id 
             FROM membros_campanha m
@@ -875,7 +773,6 @@ app.get('/campanhas/:id/jogadores', verificarToken, async (req, res) => {
     }
 });
 
-// 🔥 ROTA NOVA: ADICIONAR PERSONAGEM EXISTENTE À MESA 🔥
 app.post('/campanhas/:id/adicionar-personagem', verificarToken, async (req, res) => {
     const campanhaId = req.params.id;
     const { personagem_id } = req.body;
@@ -887,26 +784,21 @@ app.post('/campanhas/:id/adicionar-personagem', verificarToken, async (req, res)
 
         const isMestre = campCheck.rows[0].mestre_id === usuarioIdSeguro;
 
-        // 1. Checa se o usuário está na sala
         const membroCheck = await pool.query('SELECT id, personagem_id FROM membros_campanha WHERE campanha_id = $1 AND usuario_id = $2', [campanhaId, usuarioIdSeguro]);
         if (membroCheck.rows.length === 0 && !isMestre) return res.status(403).json({ erro: 'Você não tem permissão nesta mesa.' });
 
-        // 2. A ficha realmente pertence a ele?
         const charCheck = await pool.query('SELECT id FROM personagens WHERE id = $1 AND usuario_id = $2', [personagem_id, usuarioIdSeguro]);
         if (charCheck.rows.length === 0) return res.status(403).json({ erro: 'Personagem inválido ou não te pertence.' });
 
-        // 3. O personagem já tá ali?
         const dupCheck = await pool.query('SELECT id FROM membros_campanha WHERE campanha_id = $1 AND personagem_id = $2', [campanhaId, personagem_id]);
         if (dupCheck.rows.length > 0) return res.status(400).json({ erro: 'Este personagem já está na mesa.' });
 
-        // 🔥 REGRA DO LIMITE: JOGADOR SÓ PODE TER 1 FICHA! 🔥
         if (!isMestre) {
             const charAtivo = membroCheck.rows.find(r => r.personagem_id !== null);
             if (charAtivo) {
                 return res.status(400).json({ erro: 'Você já tem um personagem na mesa! Recolha-o antes de puxar outro.' });
             }
 
-            // Tem uma vaga vazia (quando ele entrou na sala)?
             const vagaVazia = membroCheck.rows.find(r => r.personagem_id === null);
             if (vagaVazia) {
                 await pool.query('UPDATE membros_campanha SET personagem_id = $1 WHERE id = $2', [personagem_id, vagaVazia.id]);
@@ -914,7 +806,6 @@ app.post('/campanhas/:id/adicionar-personagem', verificarToken, async (req, res)
                 await pool.query(`INSERT INTO membros_campanha (campanha_id, usuario_id, personagem_id) VALUES ($1, $2, $3)`, [campanhaId, usuarioIdSeguro, personagem_id]);
             }
         } else {
-            // Se for o Mestre, ele pode colocar infinitas fichas (NPCs)
             await pool.query(`INSERT INTO membros_campanha (campanha_id, usuario_id, personagem_id) VALUES ($1, $2, $3)`, [campanhaId, usuarioIdSeguro, personagem_id]);
         }
 
@@ -928,7 +819,6 @@ app.post('/campanhas/:id/adicionar-personagem', verificarToken, async (req, res)
     }
 });
 
-// 🔥 ROTA NOVA: RECOLHER PERSONAGEM (APENAS O DONO PODE FAZER ISSO) 🔥
 app.delete('/campanhas/:id/remover-personagem/:personagemId', verificarToken, async (req, res) => {
     const campanhaId = req.params.id;
     const personagemId = req.params.personagemId;
@@ -940,7 +830,6 @@ app.delete('/campanhas/:id/remover-personagem/:personagemId', verificarToken, as
 
         const isDono = charCheck.rows[0].usuario_id === usuarioIdSeguro;
 
-        // 🔥 GARANTIA ABSOLUTA: Apenas o jogador que colocou pode retirar! 🔥
         if (!isDono) return res.status(403).json({ erro: 'Acesso Negado: Você não pode retirar a ficha de outro jogador!' });
 
         const userRows = await pool.query('SELECT id, personagem_id FROM membros_campanha WHERE campanha_id = $1 AND usuario_id = $2', [campanhaId, usuarioIdSeguro]);
@@ -952,10 +841,8 @@ app.delete('/campanhas/:id/remover-personagem/:personagemId', verificarToken, as
         const isMestre = campCheck.rows[0].mestre_id === usuarioIdSeguro;
 
         if (!isMestre && userRows.rows.length === 1) {
-            // Se for jogador, ele continua na mesa, apenas a ficha é limpa!
             await pool.query('UPDATE membros_campanha SET personagem_id = NULL WHERE id = $1', [targetRow.id]);
         } else {
-            // Se for NPC do mestre, apagamos a cadeira inteira para sumir da tela
             await pool.query('DELETE FROM membros_campanha WHERE id = $1', [targetRow.id]);
         }
 
@@ -969,12 +856,8 @@ app.delete('/campanhas/:id/remover-personagem/:personagemId', verificarToken, as
     }
 });
 
-// =========================================================================
-// ROTAS DO BANNER DA CAMPANHA
-// =========================================================================
 app.get('/campanhas/:id/info', verificarToken, async (req, res) => {
     try {
-        // 🔥 AGORA PUXA A POSIÇÃO Y TAMBÉM 🔥
         const result = await pool.query('SELECT banner, banner_pos_y FROM campanhas WHERE id = $1', [req.params.id]);
         res.json(result.rows[0]);
     } catch (err) {
@@ -982,7 +865,6 @@ app.get('/campanhas/:id/info', verificarToken, async (req, res) => {
     }
 });
 
-// 🔥 NOVA ROTA: SALVAR POSIÇÃO DO BANNER 🔥
 app.put('/campanhas/:id/posicao-banner', verificarToken, async (req, res) => {
     const { posicao_y } = req.body;
     const campanhaId = req.params.id;
@@ -1000,7 +882,6 @@ app.put('/campanhas/:id/posicao-banner', verificarToken, async (req, res) => {
     }
 });
 
-// 🔥 NOVA ROTA: MESTRE CRIAR NPC NA MESA 🔥
 app.post('/campanhas/:id/criar-npc', verificarToken, async (req, res) => {
     const campanhaId = req.params.id;
     const mestreIdSeguro = req.usuario.id;
@@ -1011,12 +892,10 @@ app.post('/campanhas/:id/criar-npc', verificarToken, async (req, res) => {
             return res.status(403).json({ erro: 'Apenas o Mestre pode criar NPCs aqui.' });
         }
 
-        // 1. Cria a ficha usando JSON.stringify para o banco não reclamar!
         const sqlChar = `INSERT INTO personagens (usuario_id, nome_personagem, ocupacao, dados_ficha, foto, is_privada) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`;
         const resChar = await pool.query(sqlChar, [mestreIdSeguro, 'Novo NPC', 'Coadjuvante', JSON.stringify({}), null, true]);
         const npcId = resChar.rows[0].id;
 
-        // 2. Insere na mesa
         try {
             await pool.query(`INSERT INTO membros_campanha (campanha_id, usuario_id, personagem_id) VALUES ($1, $2, $3)`, [campanhaId, mestreIdSeguro, npcId]);
         } catch (errDb) {
@@ -1026,7 +905,6 @@ app.post('/campanhas/:id/criar-npc', verificarToken, async (req, res) => {
         res.json({ mensagem: 'NPC forjado nas sombras!', id: npcId });
     } catch (err) {
         console.error("Erro fatal ao criar NPC:", err);
-        // Agora o servidor vai te dedurar EXATAMENTE o que falhou!
         res.status(500).json({ erro: 'Erro BD: ' + err.message });
     }
 });
@@ -1037,7 +915,6 @@ app.post('/campanhas/:id/banner', verificarToken, async (req, res) => {
     const mestreIdSeguro = req.usuario.id;
 
     try {
-        // Trava de segurança: Só o mestre pode trocar o banner!
         const resultCheck = await pool.query('SELECT mestre_id FROM campanhas WHERE id = $1', [campanhaId]);
         if (resultCheck.rows.length === 0 || resultCheck.rows[0].mestre_id !== mestreIdSeguro) {
             return res.status(403).json({ erro: 'Apenas o Mestre pode alterar o banner.' });
@@ -1063,7 +940,6 @@ app.post('/campanhas/:id/banner', verificarToken, async (req, res) => {
     }
 });
 
-// 🔥 NOVA ROTA: MESTRE ALTERAR NOME DA CAMPANHA 🔥
 app.put('/campanhas/:id/nome', verificarToken, async (req, res) => {
     const { nome } = req.body;
     const campanhaId = req.params.id;
@@ -1083,25 +959,6 @@ app.put('/campanhas/:id/nome', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// Buscar jogadores para o painel de Gerenciamento 
-// =========================================================================
-app.get('/campanhas/:id/jogadores', verificarToken, async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT m.usuario_id, u.username, u.avatar, p.nome_personagem 
-            FROM membros_campanha m
-            JOIN usuarios u ON m.usuario_id = u.id
-            LEFT JOIN personagens p ON p.id = m.personagem_id
-            WHERE m.campanha_id = $1
-        `, [req.params.id]);
-        res.json(result.rows);
-    } catch (erro) {
-        console.error("❌ Erro na Rota Jogadores:", erro);
-        res.status(500).json({ erro: 'Erro ao buscar jogadores.' });
-    }
-});
-
 app.get('/campanhas/usuario/:usuarioId', verificarToken, async (req, res) => {
     const { usuarioId } = req.params;
 
@@ -1110,7 +967,6 @@ app.get('/campanhas/usuario/:usuarioId', verificarToken, async (req, res) => {
     }
 
     try {
-        // 🔥 Adicionamos o DISTINCT para ele não duplicar as mesas do Mestre!
         const sql = `
             SELECT DISTINCT c.id, c.nome, c.codigo_convite, c.mestre_id, 
             (c.mestre_id::text = $1::text) as is_mestre
@@ -1125,12 +981,8 @@ app.get('/campanhas/usuario/:usuarioId', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTA DO MESTRE: Ver todas as fichas da mesa 
-// =========================================================================
 app.get('/campanhas/:id/fichas-mesa', verificarToken, async (req, res) => {
     try {
-        // 🔥 AGORA SIM! Com o ORDER BY, o Postgres sabe exatamente como organizar e filtrar os clones!
         const result = await pool.query(`
             SELECT DISTINCT ON (p.id) p.*, u.username as nome_conta, u.avatar 
             FROM personagens p
@@ -1145,9 +997,7 @@ app.get('/campanhas/:id/fichas-mesa', verificarToken, async (req, res) => {
         res.status(500).json({ erro: 'Erro ao buscar fichas da mesa.' });
     }
 });
-// =========================================================================
-// ROTA DO MESTRE: Excluir Campanha (Destruir a Mesa)
-// =========================================================================
+
 app.delete('/campanhas/:id', verificarToken, async (req, res) => {
     const campanhaId = req.params.id;
     const mestreIdSeguro = req.usuario.id;
@@ -1179,11 +1029,6 @@ app.delete('/campanhas/:id', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// ⛺ ROTAS DE GERENCIAMENTO DE REFÚGIOS
-// =========================================================================
-
-// 1. LISTAR REFÚGIOS DO USUÁRIO
 app.get('/api/refugios', verificarToken, async (req, res) => {
     const usuarioIdSeguro = req.usuario.id;
 
@@ -1191,7 +1036,6 @@ app.get('/api/refugios', verificarToken, async (req, res) => {
         const sql = `SELECT * FROM refugios WHERE usuario_id = $1 ORDER BY criado_em DESC`;
         const result = await pool.query(sql, [usuarioIdSeguro]);
 
-        // Formata os dados de snake_case (Banco) para camelCase (Frontend)
         const refugios = result.rows.map(row => ({
             id: row.id,
             nome: row.nome,
@@ -1214,13 +1058,10 @@ app.get('/api/refugios', verificarToken, async (req, res) => {
     }
 });
 
-// 2. SALVAR OU ATUALIZAR UM REFÚGIO
 app.post('/api/refugios/salvar', verificarToken, async (req, res) => {
     const usuarioIdSeguro = req.usuario.id;
     const ref = req.body;
 
-    // Se o ID for um UUID válido do Postgres, é um Update.
-    // Se for um número temporário do frontend (ex: Date.now().toString()), é um Insert.
     const isUpdate = ref.id && regexUUID.test(ref.id);
 
     try {
@@ -1249,7 +1090,6 @@ app.post('/api/refugios/salvar', verificarToken, async (req, res) => {
                 usuarioIdSeguro, ref.nome, ref.popAtual, ref.popMax, ref.defesa, ref.moral, ref.mobilidade, ref.beligerancia, ref.agua, ref.temFonteAgua, ref.alimento, ref.madeira
             ]);
 
-            // Retorna o UUID gerado pelo banco para o frontend substituir o ID temporário!
             res.json({ mensagem: 'Refúgio criado no banco com sucesso!', id: result.rows[0].id });
         }
     } catch (erro) {
@@ -1258,7 +1098,6 @@ app.post('/api/refugios/salvar', verificarToken, async (req, res) => {
     }
 });
 
-// 3. EXCLUIR UM REFÚGIO
 app.delete('/api/refugios/deletar/:id', verificarToken, async (req, res) => {
     const id = req.params.id;
     const usuarioIdSeguro = req.usuario.id;
@@ -1280,9 +1119,6 @@ app.delete('/api/refugios/deletar/:id', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// ROTAS DA PARTITURA DO MESTRE (AUTOSAVE)
-// =========================================================================
 app.get('/campanhas/:id/partitura', verificarToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT dados_partitura FROM campanhas WHERE id = $1', [req.params.id]);
@@ -1302,11 +1138,6 @@ app.post('/campanhas/:id/partitura', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// 🤝 SISTEMA DE AMIZADES E CONVITES
-// =========================================================================
-
-// 1. Enviar Pedido de Amizade (Por Email ou Username)
 app.post('/amizades/enviar', verificarToken, async (req, res) => {
     const { alvo } = req.body; 
     const meuId = req.usuario.id;
@@ -1318,13 +1149,11 @@ app.post('/amizades/enviar', verificarToken, async (req, res) => {
         const amigoId = resBusca.rows[0].id;
         if (meuId === amigoId) return res.status(400).json({ erro: 'Você não pode adicionar a si mesmo, louco!' });
 
-        // Verifica se a amizade já existe em qualquer direção
         const check = await pool.query('SELECT * FROM amizades WHERE (usuario_id_1 = $1 AND usuario_id_2 = $2) OR (usuario_id_1 = $2 AND usuario_id_2 = $1)', [meuId, amigoId]);
         if (check.rows.length > 0) return res.status(400).json({ erro: 'Vocês já possuem uma conexão ou solicitação pendente!' });
 
         await pool.query('INSERT INTO amizades (usuario_id_1, usuario_id_2, status) VALUES ($1, $2, $3)', [meuId, amigoId, 'pendente']);
 
-        // Grito global no socket
         const io = req.app.get('io');
         if (io) io.emit('notificacao-pessoal', { usuarioId: amigoId, msg: 'Você recebeu um pedido de amizade!' });
 
@@ -1334,7 +1163,6 @@ app.post('/amizades/enviar', verificarToken, async (req, res) => {
     }
 });
 
-// 2. Buscar Amizades (Aceitas e Pendentes)
 app.get('/amizades', verificarToken, async (req, res) => {
     const meuId = req.usuario.id;
     try {
@@ -1353,7 +1181,6 @@ app.get('/amizades', verificarToken, async (req, res) => {
     }
 });
 
-// 3. Responder Pedido de Amizade
 app.post('/amizades/responder', verificarToken, async (req, res) => {
     const { amizade_id, aceito } = req.body;
     const meuId = req.usuario.id;
@@ -1371,7 +1198,6 @@ app.post('/amizades/responder', verificarToken, async (req, res) => {
     }
 });
 
-// 4. Mestre Convida Amigo para a Mesa
 app.post('/campanhas/:id/convidar-amigo', verificarToken, async (req, res) => {
     const campanhaId = req.params.id;
     const { amigo_id } = req.body;
@@ -1396,8 +1222,6 @@ app.post('/campanhas/:id/convidar-amigo', verificarToken, async (req, res) => {
     }
 });
 
-
-// 5. Jogador Vê Convites de Mesas
 app.get('/convites', verificarToken, async (req, res) => {
     const meuId = req.usuario.id;
     try {
@@ -1415,7 +1239,6 @@ app.get('/convites', verificarToken, async (req, res) => {
     }
 });
 
-// 6. Jogador Aceita Convite de Mesa
 app.post('/convites/responder', verificarToken, async (req, res) => {
     const { convite_id, aceito } = req.body;
     const meuId = req.usuario.id;
@@ -1433,7 +1256,7 @@ app.post('/convites/responder', verificarToken, async (req, res) => {
         await pool.query('DELETE FROM convites_mesa WHERE id = $1', [convite_id]);
 
         const io = req.app.get('io');
-        if (io) io.to(campanhaId.toString()).emit('atualizar-jogadores'); // Atualiza a mesa caso o mestre esteja lá
+        if (io) io.to(campanhaId.toString()).emit('atualizar-jogadores'); 
 
         res.json({ mensagem: aceito ? 'Você se juntou à campanha!' : 'Convite rasgado.' });
     } catch (err) {
@@ -1445,15 +1268,11 @@ app.post('/convites/responder', verificarToken, async (req, res) => {
     }
 });
 
-// =========================================================================
-// 🎥 ROTA PÚBLICA PARA O OBS (SISTEMA DE STREAMING)
-// =========================================================================
 app.get('/personagens/obs/:id', async (req, res) => {
     const { id } = req.params;
     if (!regexUUID.test(id)) return res.status(400).json({ erro: 'ID inválido.' });
 
     try {
-        // 🔥 AGORA PUXAMOS O ID DA CAMPANHA PARA CONECTAR NO SOCKET 🔥
         const sql = `
             SELECT p.nome_personagem, p.foto, p.dados_ficha, p.obs_pos_x, p.obs_pos_y, m.campanha_id 
             FROM personagens p
@@ -1471,14 +1290,12 @@ app.get('/personagens/obs/:id', async (req, res) => {
     }
 });
 
-// 🔥 ROTA ATUALIZADA: SALVAR ENQUADRAMENTO DA FOTO DO OBS 🔥
 app.put('/personagens/:id/posicao-foto-obs', verificarToken, async (req, res) => {
     const { posX, posY } = req.body;
     const personagemId = req.params.id;
     const usuarioIdSeguro = req.usuario.id;
 
     try {
-        // Agora salvamos a posição diretamente nas colunas blindadas, o Autosave da Ficha nunca mais vai apagar isso!
         const sql = 'UPDATE personagens SET obs_pos_x = $1, obs_pos_y = $2 WHERE id = $3 AND usuario_id = $4 RETURNING id';
         const result = await pool.query(sql, [posX, posY, personagemId, usuarioIdSeguro]);
         

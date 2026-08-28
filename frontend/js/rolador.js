@@ -1,6 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
 
-    // 🔥 ESCUDO DE SEGURANÇA DO HISTÓRICO: Garante que os textos nunca quebrem a tela! 🔥
     window.escaparHTML = window.escaparHTML || function(text) {
         if (text == null) return '';
         return text.toString().replace(/[&<>"']/g, function(m) {
@@ -63,9 +62,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return diceRequests;
     }
 
-    // ==========================================
-    // 1. FASE DE ROLAGEM 
-    // ==========================================
     function handleRoll() {
         const inputString = inputDados.value;
         const parsedDice = parseInput(inputString);
@@ -77,7 +73,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const telaAtual = sessionStorage.getItem('telaAtual');
         const isNaTelaCampanha = telaAtual === 'campanha';
 
-        // 🔥 AGORA SIM: Auto-seleciona SOMENTE se for na Campanha OU se for o terrível Teste de Perda de EGO! 🔥
         const autoSelecionarTudo = isNaTelaCampanha || window.isTesteAssimilacaoReal === true;
 
         parsedDice.forEach(die => {
@@ -98,11 +93,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Se a regra bateu, pisa no acelerador e atira direto na tela!
         if (autoSelecionarTudo) {
             window.confirmarRolagem();
         } else {
-            // Se for rolagem normal na ficha (mesmo que com Instintos/D12), a bandeja abre!
             window.renderizarRolagemPendente();
         }
     }
@@ -170,9 +163,6 @@ document.addEventListener('DOMContentLoaded', () => {
         window.renderizarRolagemPendente();
     };
 
-    // ==========================================
-    // 2. CONFIRMAÇÃO E ENVIO 
-    // ==========================================
     window.confirmarRolagem = function() {
         const mantidos = window.rolagemPendente.dados.filter(d => d.selecionado);
         if (mantidos.length === 0) {
@@ -246,9 +236,6 @@ document.addEventListener('DOMContentLoaded', () => {
         window.limparRoladorLocal(); 
     };
 
-    // ==========================================
-    // 3. CONSTRUTOR DE CARTÕES DO CHAT 
-    // ==========================================
     function criarCard(pacote, animar = false) {
         const avatar = (pacote.avatar && !pacote.avatar.includes('R0lGODlhAQAB')) ? pacote.avatar : './assets/icon.jpg';
         const nomePersonagem = pacote.nome || 'Desconhecido';
@@ -365,12 +352,10 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error("Falha ao renderizar card na tela:", e);
         }
         
-        resultsDiv.innerHTML = '';
+        // 🔥 A CORREÇÃO DO BUG 2: Removido o resultsDiv.innerHTML = ''
+        // Agora, se alguém rolar no meio da sua escolha, a sua bandeja fica lá, firme e forte!
     }
 
-    // ==========================================
-    // 4. RADAR DE VÍNCULO SECRETO DA CAMPANHA
-    // ==========================================
     async function verificarVinculoCampanha() {
         const telaAtual = sessionStorage.getItem('telaAtual');
         const charId = window.idPersonagemAtual || sessionStorage.getItem('personagemAtivoId') || new URLSearchParams(window.location.search).get('id');
@@ -450,7 +435,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!souMestre && !fuiEuQuemRolou && pacote.isMestre && !pacote.isRolagemPublica) return; 
 
                     const { card } = criarCard(pacote, false);
-                    historicoDiv.prepend(card);
+                    
+                    // 🔥 CORREÇÃO DO BUG 1: Usando append para renderizar de cima pra baixo (mais novos embaixo/em cima conforme a consulta DESC)
+                    historicoDiv.append(card); 
                 } catch (err) {
                     console.error("Erro ao desenhar bloco antigo:", err);
                 }
